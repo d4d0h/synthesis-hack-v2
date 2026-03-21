@@ -16,6 +16,6 @@
     "outDir": "./dist",
     "rootDir": "."
   },
-  "include": ["packages/*/src/**/*.ts"],
+  "include": ["packages/trust-worker/src/**/*.ts", "packages/peer-agent/src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -14,7 +14,7 @@
     "setup": "cd packages/scripts && npx tsx src/setup-wallets.ts",
     "register": "cd packages/scripts && npx tsx src/register-erc8004.ts",
     "demo": "cd packages/scripts && npx tsx src/demo-cooperation.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p packages/scripts/tsconfig.json"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

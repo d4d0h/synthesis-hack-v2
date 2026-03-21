@@ -11,7 +11,18 @@ interface AIRequest {
 }
 
 export async function callAI(env: Env, req: AIRequest): Promise<string> {
-  if (req.budget && env.VENICE_API_KEY) {
+  // Primary: Groq (free tier, fast inference)
+  if (env.GROQ_API_KEY) {
+    try {
+      return await callOpenAICompatible(
+        "https://api.groq.com/openai/v1/chat/completions",
+        env.GROQ_API_KEY, "llama-3.3-70b-versatile", req
+      );
+    } catch { /* fall through */ }
+  }
+
+  // Fallback 1: Venice AI (budget mode)
+  if (env.VENICE_API_KEY) {
     try {
       return await callOpenAICompatible(
         "https://api.venice.ai/api/v1/chat/completions",
@@ -20,16 +31,18 @@ export async function callAI(env: Env, req: AIRequest): Promise<string> {
     } catch { /* fall through */ }
   }
 
+  // Fallback 2: Anthropic Claude
   if (env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.startsWith("sk-ant-")) {
     try {
       return await callAnthropic(env.ANTHROPIC_API_KEY, req);
     } catch { /* fall through */ }
   }
 
+  // Fallback 3: OpenRouter (free models)
   if (env.OPENROUTER_API_KEY) {
     return await callOpenAICompatible(
       "https://openrouter.ai/api/v1/chat/completions",
-      env.OPENROUTER_API_KEY, "minimax/minimax-m2.7", req
+      env.OPENROUTER_API_KEY, "meta-llama/llama-3.3-70b-instruct:free", req
     );
   }
 

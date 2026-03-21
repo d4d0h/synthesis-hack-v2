@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "hono": "^4.7.0",
-    "agents": "^0.0.50",
     "viem": "^2.23.0"
   },
   "devDependencies": {

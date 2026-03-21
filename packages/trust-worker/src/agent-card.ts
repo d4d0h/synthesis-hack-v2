@@ -40,9 +40,9 @@ export function agentCard(env: Env) {
       registryAddress: env.IDENTITY_REGISTRY || "not-configured",
     },
     model: {
-      primary: "claude-opus-4-6",
-      budget: "minimax-m2.7",
-      reasoning: "anthropic",
+      primary: "llama-3.3-70b-versatile",
+      budget: "llama-3.3-70b-versatile",
+      reasoning: "groq",
     },
     tags: [
       "trust",

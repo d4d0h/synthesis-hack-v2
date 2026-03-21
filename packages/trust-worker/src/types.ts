@@ -4,7 +4,8 @@ export interface Env {
   TRUST_AGENT: DurableObjectNamespace;
 
   // AI / Model providers
-  ANTHROPIC_API_KEY: string;
+  GROQ_API_KEY: string;
+  ANTHROPIC_API_KEY?: string;
   VENICE_API_KEY?: string;
   OPENROUTER_API_KEY?: string;
 
