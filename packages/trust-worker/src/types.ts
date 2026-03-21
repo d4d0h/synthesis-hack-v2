@@ -77,6 +77,8 @@ export interface AgentState {
   onchainTokenId?: string;
   resolveCache: Record<string, CachedResolution>;
   resolutionLog: ResolutionLogEntry[];
+  assuranceCache: Record<string, CachedAssurance>;
+  assuranceLog: AssuranceLogEntry[];
 }
 
 // ── Resolution types ────────────────────────────────────────────────────
@@ -151,5 +153,66 @@ export interface ResolutionLogEntry {
   verdict: Verdict;
   trustScore: number;
   task?: string;
+  timestamp: string;
+}
+
+// ── Assurance types ─────────────────────────────────────────────────────
+
+export type AssuranceStatus = "ASSURED" | "FLAGGED" | "INSUFFICIENT_DATA";
+export type ValidationLevel = "quick" | "standard" | "thorough";
+
+export interface AssureRequest {
+  taskType: string;
+  performedBy: string;
+  artifact: {
+    summary: string;
+    output: unknown;
+    outputHash?: string;
+  };
+  expectedOutcome: {
+    description: string;
+    successCriteria?: string[];
+  };
+  validationLevel?: ValidationLevel;
+}
+
+export interface AssuranceCheck {
+  check: string;
+  passed: boolean;
+  score?: number;
+  reason?: string;
+}
+
+export interface AssuranceCertificate {
+  id: string;
+  assuredAt: string;
+  expiresAt: string;
+  assurer: string;
+  performedBy: string;
+  taskType: string;
+  status: AssuranceStatus;
+  artifactHash: string;
+  digest: string;
+}
+
+export interface AssureResult {
+  status: AssuranceStatus;
+  checks: AssuranceCheck[];
+  confidence: number;
+  recommendation: string;
+  certificate: AssuranceCertificate;
+}
+
+export interface CachedAssurance {
+  result: AssureResult;
+  expiresAt: string;
+}
+
+export interface AssuranceLogEntry {
+  id: string;
+  performedBy: string;
+  taskType: string;
+  status: AssuranceStatus;
+  confidence: number;
   timestamp: string;
 }

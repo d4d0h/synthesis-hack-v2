@@ -8,16 +8,18 @@ export function agentCard(env: Env) {
   return {
     name: "TrustVault",
     description:
-      "Open Trust Resolution Protocol for the agent economy. " +
-      "Give it any agent URL and a task — it returns whether cooperation is safe, why, and under what constraints. " +
-      "Computes verdicts from on-chain ERC-8004 state, local attestation history, sybil analysis, and AI reasoning. " +
-      "Returns signed receipts so agents can prove they resolved trust before cooperating.",
-    version: "2.1.0",
+      "Open Trust Resolution Protocol + Outcome Assurance for the agent economy. " +
+      "/resolve: pre-task — is cooperation safe? /assure: post-task — is the result reliable? " +
+      "Computes verdicts from on-chain ERC-8004 state, attestation history, sybil analysis, and AI reasoning. " +
+      "Both return signed certificates as proof.",
+    version: "2.2.0",
     protocol: "a2a",
     capabilities: [
       "trust-resolution",
+      "outcome-assurance",
       "task-aware-verdict",
       "signed-receipt",
+      "signed-certificate",
       "sybil-detection",
       "erc8004-identity",
       "attestation-issuing",
@@ -30,14 +32,24 @@ export function agentCard(env: Env) {
       {
         name: "resolve_agent_trust",
         description:
-          "Universal trust resolution — send an agent URL + task context, " +
+          "Pre-task trust resolution — send an agent URL + task context, " +
           "get a verdict (TRUSTED/CAUTIOUS/UNTRUSTED/UNKNOWN), capability gap analysis, " +
           "risk-adjusted safeguards, and a signed receipt",
+      },
+      {
+        name: "assure_outcome",
+        description:
+          "Post-task outcome assurance — send a task result + performer URL, " +
+          "get 6-check verification (ASSURED/FLAGGED/INSUFFICIENT_DATA) with " +
+          "trust cross-ref, capability match, output consistency, sybil check, " +
+          "and a signed certificate",
       },
     ],
     endpoints: {
       resolve: "/resolve",
       resolutionLog: "/resolution-log",
+      assure: "/assure",
+      assuranceLog: "/assurance-log",
       health: "/health",
       agentCard: "/.well-known/agent.json",
       trustResume: "/trust/resume",

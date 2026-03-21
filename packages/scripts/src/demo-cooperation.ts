@@ -15,11 +15,11 @@ const PEER_URL = process.env.PEER_URL || "http://localhost:8788";
 
 async function main() {
   console.log("╔═══════════════════════════════════════════════════╗");
-  console.log("║   TrustVault v2.1 — Trust Resolution Demo        ║");
+  console.log("║   TrustVault v2.2 — Full Trust Lifecycle Demo     ║");
   console.log("╚═══════════════════════════════════════════════════╝\n");
 
   let passed = 0;
-  const total = 13;
+  const total = 16;
 
   // Step 1-2: Discover both agents
   const [tvCard, peerCard] = await Promise.all([
@@ -111,7 +111,7 @@ async function main() {
   // ─── NEW: Trust Resolution Steps ────────────────────────────
 
   console.log("\n╔═══════════════════════════════════════════════════╗");
-  console.log("║   Trust Resolution Protocol (v2.1)               ║");
+  console.log("║   Trust Resolution + Outcome Assurance (v2.2)     ║");
   console.log("╚═══════════════════════════════════════════════════╝");
 
   // Step 11: Resolve trust for Peer (no task — general)
@@ -153,6 +153,64 @@ async function main() {
     };
   });
   if (step13.ok) passed++;
+
+  // ─── Outcome Assurance Steps ────────────────────────────────
+
+  console.log("\n╔═══════════════════════════════════════════════════╗");
+  console.log("║   Outcome Assurance                              ║");
+  console.log("╚═══════════════════════════════════════════════════╝");
+
+  // Step 14: Simulate Peer completing a data-analysis task
+  const taskOutput = {
+    trends: ["DeFi TVL up 23% MoM", "NFT volume declining", "L2 adoption accelerating"],
+    recommendation: "Increase allocation to L2 infrastructure projects, reduce NFT exposure",
+    confidence: 0.78,
+    sources: ["DefiLlama", "Dune Analytics", "L2Beat"],
+  };
+
+  const assure1 = await runStep("14. Assure outcome — Peer's data-analysis result", () =>
+    fetchJson(`${TV_URL}/assure`, {
+      method: "POST",
+      body: {
+        taskType: "data-analysis",
+        performedBy: PEER_URL,
+        artifact: {
+          summary: "Market trend analysis with investment recommendations",
+          output: taskOutput,
+        },
+        expectedOutcome: {
+          description: "Analyze current market trends and provide actionable investment recommendations",
+          successCriteria: [
+            "Identifies at least 3 market trends",
+            "Provides specific recommendations",
+            "Cites data sources",
+            "Includes confidence level",
+          ],
+        },
+        validationLevel: "standard",
+      },
+    })
+  );
+  if (assure1.ok) passed++;
+
+  // Step 15: Show assurance certificate
+  const assureResult = assure1.result as { certificate?: { id: string; digest: string; status: string; artifactHash: string } } | null;
+  const cert = assureResult?.certificate;
+  const step15 = await runStep("15. Assurance certificate — proof of outcome verification", async () => {
+    if (!cert) throw new Error("No certificate from step 14");
+    return {
+      proof: "This certificate proves TrustVault independently verified this task output.",
+      certificate: cert,
+      verification: `SHA-256("${cert.id}:${cert.status}:${cert.artifactHash}:<timestamp>") === ${cert.digest}`,
+    };
+  });
+  if (step15.ok) passed++;
+
+  // Step 16: Check assurance log
+  const assuranceLog = await runStep("16. Assurance audit trail", () =>
+    fetchJson(`${TV_URL}/assurance-log`)
+  );
+  if (assuranceLog.ok) passed++;
 
   console.log(`\n═══════════════════════════════════════════════════`);
   console.log(`Results: ${passed}/${total} steps passed`);

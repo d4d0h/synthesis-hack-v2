@@ -16,15 +16,20 @@ import type {
   ResolveRequest,
   ResolveResult,
   CachedResolution,
+  AssureRequest,
+  AssureResult,
+  CachedAssurance,
 } from "./types";
 import { computeAddress } from "./crypto";
 import { callAI } from "./ai";
 import { resolveAgent } from "./resolve";
+import { assureOutcome } from "./assure";
+import { sha256Hex } from "./crypto";
 
 const MAX_ATTESTATIONS = 500;
 const MAX_COOPERATION_RECORDS = 200;
-const MAX_RESOLUTION_LOG = 100;
-const RESOLVE_CACHE_TTL_MS = 300_000; // 5 minutes
+const MAX_LOG_ENTRIES = 100;
+const CACHE_TTL_MS = 300_000; // 5 minutes
 
 const DEFAULT_STATE: AgentState = {
   address: "",
@@ -35,6 +40,8 @@ const DEFAULT_STATE: AgentState = {
   onchainRegistered: false,
   resolveCache: {},
   resolutionLog: [],
+  assuranceCache: {},
+  assuranceLog: [],
 };
 
 export class TrustAgent extends DurableObject<Env> {
@@ -50,6 +57,8 @@ export class TrustAgent extends DurableObject<Env> {
         ...stored,
         resolveCache: stored.resolveCache ?? {},
         resolutionLog: stored.resolutionLog ?? [],
+        assuranceCache: stored.assuranceCache ?? {},
+        assuranceLog: stored.assuranceLog ?? [],
       };
     } else {
       const address = computeAddress(this.env.AGENT_PRIVATE_KEY);
@@ -73,8 +82,11 @@ export class TrustAgent extends DurableObject<Env> {
     if (this.state.cooperationHistory.length > MAX_COOPERATION_RECORDS) {
       this.state.cooperationHistory = this.state.cooperationHistory.slice(-MAX_COOPERATION_RECORDS);
     }
-    if (this.state.resolutionLog.length > MAX_RESOLUTION_LOG) {
-      this.state.resolutionLog = this.state.resolutionLog.slice(-MAX_RESOLUTION_LOG);
+    if (this.state.resolutionLog.length > MAX_LOG_ENTRIES) {
+      this.state.resolutionLog = this.state.resolutionLog.slice(-MAX_LOG_ENTRIES);
+    }
+    if (this.state.assuranceLog.length > MAX_LOG_ENTRIES) {
+      this.state.assuranceLog = this.state.assuranceLog.slice(-MAX_LOG_ENTRIES);
     }
   }
 
@@ -102,7 +114,7 @@ export class TrustAgent extends DurableObject<Env> {
 
     this.state.resolveCache[cacheKey] = {
       result,
-      expiresAt: new Date(now + RESOLVE_CACHE_TTL_MS).toISOString(),
+      expiresAt: new Date(now + CACHE_TTL_MS).toISOString(),
     } satisfies CachedResolution;
 
     this.state.resolutionLog.push({
@@ -124,6 +136,71 @@ export class TrustAgent extends DurableObject<Env> {
     return {
       resolutions: this.state.resolutionLog,
       count: this.state.resolutionLog.length,
+    };
+  }
+
+  // ─── Outcome Assurance ─────────────────────────────────────
+
+  async assure(req: AssureRequest): Promise<AssureResult> {
+    await this.init();
+
+    const outputStr = typeof req.artifact.output === "string"
+      ? req.artifact.output
+      : JSON.stringify(req.artifact.output);
+    const artifactHash = req.artifact.outputHash ?? await sha256Hex(outputStr);
+    const cacheKey = await sha256Hex(`${req.performedBy}:${req.taskType}:${artifactHash}`);
+
+    const now = Date.now();
+    const cached = this.state.assuranceCache[cacheKey];
+    if (cached && new Date(cached.expiresAt).getTime() > now) {
+      return cached.result;
+    }
+
+    // Evict stale assurance cache entries
+    for (const key of Object.keys(this.state.assuranceCache)) {
+      if (new Date(this.state.assuranceCache[key].expiresAt).getTime() <= now) {
+        delete this.state.assuranceCache[key];
+      }
+    }
+
+    const result = await assureOutcome(req, {
+      env: this.env,
+      state: this.state,
+      getCachedResolve: (agentUrl: string) => {
+        for (const entry of Object.values(this.state.resolveCache)) {
+          if (entry.result.receipt.targetAgent === agentUrl &&
+              new Date(entry.expiresAt).getTime() > now) {
+            return entry.result;
+          }
+        }
+        return null;
+      },
+    });
+
+    this.state.assuranceCache[cacheKey] = {
+      result,
+      expiresAt: new Date(now + CACHE_TTL_MS).toISOString(),
+    } satisfies CachedAssurance;
+
+    this.state.assuranceLog.push({
+      id: result.certificate.id,
+      performedBy: req.performedBy,
+      taskType: req.taskType,
+      status: result.status,
+      confidence: result.confidence,
+      timestamp: result.certificate.assuredAt,
+    });
+    this.trimArrays();
+    await this.persist();
+
+    return result;
+  }
+
+  async getAssuranceLog() {
+    await this.init();
+    return {
+      assurances: this.state.assuranceLog,
+      count: this.state.assuranceLog.length,
     };
   }
 

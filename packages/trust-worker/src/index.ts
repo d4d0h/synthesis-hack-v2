@@ -1,5 +1,5 @@
 /**
- * TrustVault v2.1 — Open Trust Resolution Protocol
+ * TrustVault v2.2 — Trust Resolution + Outcome Assurance
  *
  * Give it any agent URL + task context → get a verdict, capability analysis,
  * risk-adjusted safeguards, AI reasoning, and a signed receipt.
@@ -25,11 +25,13 @@ app.get("/health", (c) =>
   c.json({
     status: "ok",
     agent: "TrustVault",
-    version: "2.1.0",
+    version: "2.2.0",
     features: [
       "trust-resolution-protocol",
+      "outcome-assurance",
       "task-aware-verdicts",
       "signed-receipts",
+      "signed-certificates",
       "sybil-detection",
       "erc8004-identity",
       "attestation-management",
@@ -48,6 +50,18 @@ app.post("/resolve", async (c) => {
 app.get("/resolution-log", async (c) => {
   const agent = getAgent(c.env);
   return c.json(await agent.getResolutionLog());
+});
+
+// ─── Outcome Assurance ───
+app.post("/assure", async (c) => {
+  const body = await c.req.json();
+  const agent = getAgent(c.env);
+  return c.json(await agent.assure(body));
+});
+
+app.get("/assurance-log", async (c) => {
+  const agent = getAgent(c.env);
+  return c.json(await agent.getAssuranceLog());
 });
 
 // ─── Trust Resume (public, read-only) ───
