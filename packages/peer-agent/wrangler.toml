@@ -7,3 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 PEER_NAME = "VerifyBot"
 PEER_ADDRESS = "0x00000000000000000000000000000000deadbeef"
 TRUSTVAULT_URL = "https://trustvault-agent.leaidedev.workers.dev"
+
+[[services]]
+binding = "TRUSTVAULT"
+service = "trustvault-agent"

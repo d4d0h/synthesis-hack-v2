@@ -15,9 +15,20 @@ interface Env {
   PEER_NAME: string;
   PEER_ADDRESS: string;
   TRUSTVAULT_URL: string;
+  TRUSTVAULT: Fetcher;
 }
 
 const FALLBACK_ADDRESS = "0x00000000000000000000000000000000deadbeef";
+
+/** Use service binding if available (worker-to-worker), else fall back to public URL */
+function tvFetch(env: Env, path: string, init?: RequestInit): Promise<Response> {
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  if (env.TRUSTVAULT) {
+    return env.TRUSTVAULT.fetch(new Request(`https://fake-host${cleanPath}`, init));
+  }
+  const tvUrl = env.TRUSTVAULT_URL || "http://localhost:8787";
+  return fetch(`${tvUrl}${cleanPath}`, init);
+}
 
 const app = new Hono<{ Bindings: Env }>();
 app.use("*", cors());
@@ -76,7 +87,6 @@ app.post("/trust/cooperate/accept", async (c) => {
 
 // ─── Full Demo Flow ───
 app.get("/demo/full-flow", async (c) => {
-  const tvUrl = c.env.TRUSTVAULT_URL || "http://localhost:8787";
   const peerAddress = c.env.PEER_ADDRESS || FALLBACK_ADDRESS;
   const steps: Array<{ step: string; result: unknown; ok: boolean }> = [];
 
@@ -84,8 +94,8 @@ app.get("/demo/full-flow", async (c) => {
   let tvAddress = "";
   try {
     const [cardRes, resumeRes] = await Promise.all([
-      fetch(`${tvUrl}/.well-known/agent.json`),
-      fetch(`${tvUrl}/trust/resume`),
+      tvFetch(c.env, "/.well-known/agent.json"),
+      tvFetch(c.env, "/trust/resume"),
     ]);
     const card = await cardRes.json();
     const resume = (await resumeRes.json()) as { address?: string };
@@ -98,7 +108,7 @@ app.get("/demo/full-flow", async (c) => {
   // Step 2: Issue attestation to TrustVault (using its real address)
   if (tvAddress) {
     try {
-      const res = await fetch(`${tvUrl}/trust/attest`, {
+      const res = await tvFetch(c.env, "/trust/attest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -117,12 +127,12 @@ app.get("/demo/full-flow", async (c) => {
 
   // Step 3: Request cooperation from TrustVault
   try {
-    const res = await fetch(`${tvUrl}/trust/cooperate`, {
+    const res = await tvFetch(c.env, "/trust/cooperate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         peerAddress,
-        peerUrl: "http://localhost:8788",
+        peerUrl: "https://trustvault-peer.leaidedev.workers.dev",
         task: "Joint code review and attestation exchange",
       }),
     });
@@ -134,7 +144,7 @@ app.get("/demo/full-flow", async (c) => {
 
   // Step 4: Check updated trust resume
   try {
-    const res = await fetch(`${tvUrl}/trust/resume`);
+    const res = await tvFetch(c.env, "/trust/resume");
     const resume = await res.json();
     steps.push({ step: "4. Post-cooperation trust resume", result: resume, ok: true });
   } catch (e: unknown) {
