@@ -220,9 +220,7 @@ Cites data sources</textarea>
 </section>
 
 <footer>
-  <svg class="brain-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M12 2C9 2 7 4 7 6.5C7 5 5.5 4 4 4.5C2.5 5 2 7 3 8.5C1.5 9 1 11 2 12.5C1 13.5 1 15.5 2.5 16.5C2 17.5 2.5 19.5 4 20C4.5 21.5 6.5 22 8 21C9 22 11 22 12 21M12 2C15 2 17 4 17 6.5C17 5 18.5 4 20 4.5C21.5 5 22 7 21 8.5C22.5 9 23 11 22 12.5C23 13.5 23 15.5 21.5 16.5C22 17.5 21.5 19.5 20 20C19.5 21.5 17.5 22 16 21C15 22 13 22 12 21M12 2V21" stroke="#e53e3e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>
+  <svg class="brain-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e53e3e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></svg>
   built by <a href="https://github.com/unbrained-labs" target="_blank">unbrained labs</a>
   &nbsp;|&nbsp;
   <a href="https://synthesis.devfolio.co" target="_blank">synthesis hackathon</a>
