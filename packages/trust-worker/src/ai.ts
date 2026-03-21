@@ -20,7 +20,7 @@ export async function callAI(env: Env, req: AIRequest): Promise<string> {
     } catch { /* fall through */ }
   }
 
-  if (env.ANTHROPIC_API_KEY) {
+  if (env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.startsWith("sk-ant-")) {
     try {
       return await callAnthropic(env.ANTHROPIC_API_KEY, req);
     } catch { /* fall through */ }

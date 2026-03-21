@@ -41,12 +41,13 @@ app.get("/trust/resume/:address", async (c) => {
 app.post("/trust/attest", async (c) => {
   const body = await c.req.json<{
     targetAddress: string;
+    fromAddress?: string;
     category: string;
     score: number;
     evidence?: string;
   }>();
-  const agent = await getAgent(c.env);
-  return c.json(await agent.issueAttestation(body));
+  const agent = getAgent(c.env);
+  return c.json(await agent.handleAttestation(body));
 });
 
 app.get("/trust/attestations", async (c) => {

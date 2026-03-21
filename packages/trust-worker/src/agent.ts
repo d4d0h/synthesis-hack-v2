@@ -89,33 +89,45 @@ export class TrustAgent extends DurableObject<Env> {
     return this.buildResume(address, "unknown", attestations);
   }
 
-  async issueAttestation(params: {
+  /**
+   * Handle an attestation — routes to given or received based on context.
+   * If fromAddress is provided and targetAddress is this agent, it's incoming (received).
+   * Otherwise it's outgoing (given by this agent about someone else).
+   */
+  async handleAttestation(params: {
     targetAddress: string;
+    fromAddress?: string;
     category: string;
     score: number;
     evidence?: string;
-  }): Promise<{ attestation: Attestation; trustScore: number }> {
+  }): Promise<{ attestation: Attestation; trustScore: number; direction: "given" | "received" }> {
     await this.init();
+
+    const targetAddr = params.targetAddress.toLowerCase();
+    const isIncoming = targetAddr === this.state.address.toLowerCase();
+    const fromAddr = (params.fromAddress || this.state.address).toLowerCase();
 
     const attestation: Attestation = {
       id: crypto.randomUUID(),
-      from: this.state.address,
-      to: params.targetAddress.toLowerCase(),
+      from: isIncoming ? fromAddr : this.state.address,
+      to: targetAddr,
       category: params.category,
       score: Math.max(0, Math.min(100, params.score)),
       evidence: params.evidence,
       timestamp: Date.now(),
     };
 
-    this.state.attestationsGiven.push(attestation);
+    if (isIncoming) {
+      this.state.attestationsReceived.push(attestation);
+    } else {
+      this.state.attestationsGiven.push(attestation);
+    }
     this.trimArrays();
     await this.persist();
 
-    const trustScore = this.computeTrustScore(
-      this.state.attestationsReceived.filter((a) => a.to === params.targetAddress.toLowerCase())
-    );
+    const trustScore = this.computeTrustScore(this.state.attestationsReceived);
 
-    return { attestation, trustScore };
+    return { attestation, trustScore, direction: isIncoming ? "received" : "given" };
   }
 
   async receiveAttestation(attestation: Attestation): Promise<{ accepted: boolean }> {
@@ -241,16 +253,23 @@ export class TrustAgent extends DurableObject<Env> {
     await this.init();
     const trustScore = this.computeTrustScore(this.state.attestationsReceived);
     const attestationCount = this.state.attestationsReceived.length;
-    const reply = await callAI(this.env, {
-      system:
-        `You are TrustVault, an autonomous trust-evaluating agent. ` +
-        `Your address: ${this.state.address}. Trust score: ${trustScore}. ` +
-        `Attestations received: ${attestationCount}. ` +
-        `You help agents build verifiable trust profiles using ERC-8004 onchain identity. ` +
-        `Be concise, professional, and data-driven.`,
-      user: message,
-    });
-    return { reply };
+    try {
+      const reply = await callAI(this.env, {
+        system:
+          `You are TrustVault, an autonomous trust-evaluating agent. ` +
+          `Your address: ${this.state.address}. Trust score: ${trustScore}. ` +
+          `Attestations received: ${attestationCount}. ` +
+          `You help agents build verifiable trust profiles using ERC-8004 onchain identity. ` +
+          `Be concise, professional, and data-driven.`,
+        user: message,
+      });
+      return { reply };
+    } catch {
+      return {
+        reply: `I'm TrustVault. My trust score is ${trustScore} with ${attestationCount} attestations received. ` +
+          `AI provider not configured — operating in data-only mode.`,
+      };
+    }
   }
 
   async setOnchainRegistered(txHash: string, tokenId?: string): Promise<void> {
