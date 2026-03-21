@@ -22,6 +22,9 @@ export interface Env {
   SYNTH_API_KEY?: string;
 }
 
+/** Cooperation decision options */
+export type CooperationDecision = "accept" | "negotiate" | "decline";
+
 /** An attestation record */
 export interface Attestation {
   id: string;
@@ -39,7 +42,7 @@ export interface TrustResume {
   address: string;
   name: string;
   trustScore: number;
-  attestationCount: number;
+  totalAttestationCount: number;
   categories: Record<string, { avgScore: number; count: number }>;
   recentAttestations: Attestation[];
   onchainIdentity?: {
@@ -56,7 +59,7 @@ export interface TrustResume {
 export interface CooperationRecord {
   peerAddress: string;
   task: string;
-  decision: "accept" | "negotiate" | "decline";
+  decision: CooperationDecision;
   peerTrustScore: number;
   timestamp: number;
 }

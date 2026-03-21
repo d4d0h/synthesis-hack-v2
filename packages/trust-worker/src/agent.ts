@@ -11,10 +11,14 @@ import type {
   Attestation,
   TrustResume,
   CooperationRecord,
+  CooperationDecision,
   AgentState,
 } from "./types";
 import { computeAddress } from "./crypto";
 import { callAI } from "./ai";
+
+const MAX_ATTESTATIONS = 500;
+const MAX_COOPERATION_RECORDS = 200;
 
 const DEFAULT_STATE: AgentState = {
   address: "",
@@ -46,29 +50,44 @@ export class TrustAgent extends DurableObject<Env> {
     await this.ctx.storage.put("state", this.state);
   }
 
-  // ─── Trust Resume ───
+  /** Cap arrays to prevent exceeding DO storage limits */
+  private trimArrays(): void {
+    if (this.state.attestationsGiven.length > MAX_ATTESTATIONS) {
+      this.state.attestationsGiven = this.state.attestationsGiven.slice(-MAX_ATTESTATIONS);
+    }
+    if (this.state.attestationsReceived.length > MAX_ATTESTATIONS) {
+      this.state.attestationsReceived = this.state.attestationsReceived.slice(-MAX_ATTESTATIONS);
+    }
+    if (this.state.cooperationHistory.length > MAX_COOPERATION_RECORDS) {
+      this.state.cooperationHistory = this.state.cooperationHistory.slice(-MAX_COOPERATION_RECORDS);
+    }
+  }
 
   async getResume(): Promise<TrustResume> {
     await this.init();
-    return this.buildResume(this.state);
+    return this.buildResume(this.state.address, this.state.name, this.state.attestationsReceived, {
+      onchainIdentity: {
+        registered: this.state.onchainRegistered,
+        registryAddress: this.env.IDENTITY_REGISTRY || "not-configured",
+        tokenId: this.state.onchainTokenId,
+        txHash: this.state.onchainTxHash,
+      },
+      cooperationHistory: this.state.cooperationHistory.slice(-10),
+    });
   }
 
   async getRemoteResume(address: string): Promise<TrustResume | { error: string }> {
     await this.init();
-    // Check if we have attestation data for this address
-    const received = this.state.attestationsReceived.filter(
-      (a) => a.to.toLowerCase() === address.toLowerCase()
-    );
-    const given = this.state.attestationsGiven.filter(
-      (a) => a.to.toLowerCase() === address.toLowerCase()
-    );
-    if (received.length === 0 && given.length === 0) {
+    const addr = address.toLowerCase();
+    const attestations = [
+      ...this.state.attestationsReceived.filter((a) => a.to === addr),
+      ...this.state.attestationsGiven.filter((a) => a.to === addr),
+    ];
+    if (attestations.length === 0) {
       return { error: `No trust data found for ${address}` };
     }
-    return this.buildResumeFor(address, [...received, ...given]);
+    return this.buildResume(address, "unknown", attestations);
   }
-
-  // ─── Attestations ───
 
   async issueAttestation(params: {
     targetAddress: string;
@@ -81,7 +100,7 @@ export class TrustAgent extends DurableObject<Env> {
     const attestation: Attestation = {
       id: crypto.randomUUID(),
       from: this.state.address,
-      to: params.targetAddress,
+      to: params.targetAddress.toLowerCase(),
       category: params.category,
       score: Math.max(0, Math.min(100, params.score)),
       evidence: params.evidence,
@@ -89,12 +108,11 @@ export class TrustAgent extends DurableObject<Env> {
     };
 
     this.state.attestationsGiven.push(attestation);
+    this.trimArrays();
     await this.persist();
 
     const trustScore = this.computeTrustScore(
-      this.state.attestationsReceived.filter(
-        (a) => a.to.toLowerCase() === params.targetAddress.toLowerCase()
-      )
+      this.state.attestationsReceived.filter((a) => a.to === params.targetAddress.toLowerCase())
     );
 
     return { attestation, trustScore };
@@ -102,15 +120,15 @@ export class TrustAgent extends DurableObject<Env> {
 
   async receiveAttestation(attestation: Attestation): Promise<{ accepted: boolean }> {
     await this.init();
+    attestation.from = attestation.from.toLowerCase();
+    attestation.to = attestation.to.toLowerCase();
     this.state.attestationsReceived.push(attestation);
+    this.trimArrays();
     await this.persist();
     return { accepted: true };
   }
 
-  async getAttestations(): Promise<{
-    given: Attestation[];
-    received: Attestation[];
-  }> {
+  async getAttestations(): Promise<{ given: Attestation[]; received: Attestation[] }> {
     await this.init();
     return {
       given: this.state.attestationsGiven,
@@ -120,68 +138,61 @@ export class TrustAgent extends DurableObject<Env> {
 
   async getAttestationsFor(address: string): Promise<Attestation[]> {
     await this.init();
+    const addr = address.toLowerCase();
     return [
-      ...this.state.attestationsGiven.filter(
-        (a) => a.to.toLowerCase() === address.toLowerCase()
-      ),
-      ...this.state.attestationsReceived.filter(
-        (a) => a.from.toLowerCase() === address.toLowerCase()
-      ),
+      ...this.state.attestationsGiven.filter((a) => a.to === addr),
+      ...this.state.attestationsReceived.filter((a) => a.from === addr),
     ];
   }
-
-  // ─── Cooperation ───
 
   async evaluateCooperation(params: {
     peerAddress: string;
     peerUrl: string;
     task: string;
   }): Promise<{
-    decision: "accept" | "negotiate" | "decline";
+    decision: CooperationDecision;
     reason: string;
     peerTrustScore: number;
   }> {
     await this.init();
 
-    // Fetch peer's trust resume
     let peerResume: TrustResume | null = null;
     try {
       const res = await fetch(`${params.peerUrl}/trust/resume`);
       if (res.ok) peerResume = await res.json();
     } catch {
-      // Peer unreachable — factor into decision
+      // Peer unreachable
     }
 
     const peerTrustScore = peerResume?.trustScore ?? 0;
-    const peerAttestations = peerResume?.attestationCount ?? 0;
 
     // AI-enhanced cooperation decision
-    const aiDecision = await callAI(this.env, {
-      system:
-        "You are TrustVault, a trust-evaluating agent. Given a peer's trust profile and a proposed task, " +
-        "decide whether to accept, negotiate, or decline cooperation. Be concise. " +
-        "Respond with JSON: { decision, reason }",
-      user: JSON.stringify({
-        task: params.task,
-        peerAddress: params.peerAddress,
-        peerTrustScore,
-        peerAttestations,
-        peerCategories: peerResume?.categories ?? {},
-        myTrustScore: this.computeTrustScore(this.state.attestationsReceived),
-      }),
-    });
-
-    let decision: "accept" | "negotiate" | "decline" = "negotiate";
+    let decision: CooperationDecision = "negotiate";
     let reason = "Defaulting to negotiation.";
 
     try {
+      const aiDecision = await callAI(this.env, {
+        system:
+          "You are TrustVault, a trust-evaluating agent. Given a peer's trust profile and a proposed task, " +
+          "decide whether to accept, negotiate, or decline cooperation. Be concise. " +
+          'Respond with JSON: { "decision": "accept"|"negotiate"|"decline", "reason": "..." }',
+        user: JSON.stringify({
+          task: params.task,
+          peerAddress: params.peerAddress,
+          peerTrustScore,
+          peerAttestations: peerResume?.totalAttestationCount ?? 0,
+          peerCategories: peerResume?.categories ?? {},
+          myTrustScore: this.computeTrustScore(this.state.attestationsReceived),
+        }),
+      });
+
       const parsed = JSON.parse(aiDecision);
       if (["accept", "negotiate", "decline"].includes(parsed.decision)) {
         decision = parsed.decision;
       }
       reason = parsed.reason || reason;
     } catch {
-      // Use score-based heuristic as fallback
+      // Score-based heuristic fallback
       if (peerTrustScore >= 70) {
         decision = "accept";
         reason = `Trust score ${peerTrustScore} exceeds acceptance threshold.`;
@@ -194,15 +205,7 @@ export class TrustAgent extends DurableObject<Env> {
       }
     }
 
-    // Record cooperation decision
-    const record: CooperationRecord = {
-      peerAddress: params.peerAddress,
-      task: params.task,
-      decision,
-      peerTrustScore,
-      timestamp: Date.now(),
-    };
-    this.state.cooperationHistory.push(record);
+    this.recordCooperation(params.peerAddress, params.task, decision, peerTrustScore);
     await this.persist();
 
     return { decision, reason, peerTrustScore };
@@ -219,16 +222,11 @@ export class TrustAgent extends DurableObject<Env> {
   }> {
     await this.init();
 
-    if (params.trustScore >= 60) {
-      const record: CooperationRecord = {
-        peerAddress: params.fromAddress,
-        task: params.task,
-        decision: "accept",
-        peerTrustScore: params.trustScore,
-        timestamp: Date.now(),
-      };
-      this.state.cooperationHistory.push(record);
-      await this.persist();
+    const decision: CooperationDecision = params.trustScore >= 60 ? "accept" : "decline";
+    this.recordCooperation(params.fromAddress, params.task, decision, params.trustScore);
+    await this.persist();
+
+    if (decision === "accept") {
       return { accepted: true, reason: "Trust score meets cooperation threshold." };
     }
 
@@ -239,24 +237,21 @@ export class TrustAgent extends DurableObject<Env> {
     };
   }
 
-  // ─── AI Chat ───
-
   async chat(message: string): Promise<{ reply: string }> {
     await this.init();
-    const resume = await this.getResume();
+    const trustScore = this.computeTrustScore(this.state.attestationsReceived);
+    const attestationCount = this.state.attestationsReceived.length;
     const reply = await callAI(this.env, {
       system:
         `You are TrustVault, an autonomous trust-evaluating agent. ` +
-        `Your address: ${this.state.address}. Trust score: ${resume.trustScore}. ` +
-        `Attestations received: ${resume.attestationCount}. ` +
+        `Your address: ${this.state.address}. Trust score: ${trustScore}. ` +
+        `Attestations received: ${attestationCount}. ` +
         `You help agents build verifiable trust profiles using ERC-8004 onchain identity. ` +
         `Be concise, professional, and data-driven.`,
       user: message,
     });
     return { reply };
   }
-
-  // ─── Onchain State ───
 
   async setOnchainRegistered(txHash: string, tokenId?: string): Promise<void> {
     await this.init();
@@ -266,32 +261,39 @@ export class TrustAgent extends DurableObject<Env> {
     await this.persist();
   }
 
-  // ─── Internal helpers ───
+  private recordCooperation(
+    peerAddress: string,
+    task: string,
+    decision: CooperationDecision,
+    peerTrustScore: number,
+  ): void {
+    this.state.cooperationHistory.push({
+      peerAddress,
+      task,
+      decision,
+      peerTrustScore,
+      timestamp: Date.now(),
+    });
+    this.trimArrays();
+  }
 
   private computeTrustScore(attestations: Attestation[]): number {
     if (attestations.length === 0) return 0;
 
-    // Weighted average of attestation scores
     const avgScore =
       attestations.reduce((sum, a) => sum + a.score, 0) / attestations.length;
-
-    // Volume bonus: more attestations = higher confidence (caps at +15)
     const volumeBonus = Math.min(15, attestations.length * 2);
-
-    // Diversity bonus: more categories = more robust profile (caps at +10)
     const categories = new Set(attestations.map((a) => a.category));
     const diversityBonus = Math.min(10, categories.size * 3);
-
-    // Onchain bonus: registered identity adds credibility
     const onchainBonus = this.state.onchainRegistered ? 5 : 0;
 
     return Math.min(100, Math.round(avgScore + volumeBonus + diversityBonus + onchainBonus));
   }
 
-  private buildResume(state: AgentState): TrustResume {
-    const attestations = state.attestationsReceived;
+  private aggregateCategories(
+    attestations: Attestation[]
+  ): Record<string, { avgScore: number; count: number }> {
     const categories: Record<string, { avgScore: number; count: number }> = {};
-
     for (const a of attestations) {
       if (!categories[a.category]) {
         categories[a.category] = { avgScore: 0, count: 0 };
@@ -300,43 +302,27 @@ export class TrustAgent extends DurableObject<Env> {
       cat.avgScore = (cat.avgScore * cat.count + a.score) / (cat.count + 1);
       cat.count++;
     }
-
-    return {
-      address: state.address,
-      name: state.name,
-      trustScore: this.computeTrustScore(attestations),
-      attestationCount: attestations.length,
-      categories,
-      recentAttestations: attestations.slice(-10),
-      onchainIdentity: {
-        registered: state.onchainRegistered,
-        registryAddress: this.env.IDENTITY_REGISTRY || "not-configured",
-        tokenId: state.onchainTokenId,
-        txHash: state.onchainTxHash,
-      },
-      cooperationHistory: state.cooperationHistory.slice(-10),
-      lastUpdated: Date.now(),
-    };
+    return categories;
   }
 
-  private buildResumeFor(address: string, attestations: Attestation[]): TrustResume {
-    const categories: Record<string, { avgScore: number; count: number }> = {};
-    for (const a of attestations) {
-      if (!categories[a.category]) {
-        categories[a.category] = { avgScore: 0, count: 0 };
-      }
-      const cat = categories[a.category];
-      cat.avgScore = (cat.avgScore * cat.count + a.score) / (cat.count + 1);
-      cat.count++;
-    }
+  private buildResume(
+    address: string,
+    name: string,
+    attestations: Attestation[],
+    extras?: {
+      onchainIdentity?: TrustResume["onchainIdentity"];
+      cooperationHistory?: CooperationRecord[];
+    },
+  ): TrustResume {
     return {
       address,
-      name: "unknown",
+      name,
       trustScore: this.computeTrustScore(attestations),
-      attestationCount: attestations.length,
-      categories,
+      totalAttestationCount: attestations.length,
+      categories: this.aggregateCategories(attestations),
       recentAttestations: attestations.slice(-10),
-      cooperationHistory: [],
+      onchainIdentity: extras?.onchainIdentity,
+      cooperationHistory: extras?.cooperationHistory ?? [],
       lastUpdated: Date.now(),
     };
   }

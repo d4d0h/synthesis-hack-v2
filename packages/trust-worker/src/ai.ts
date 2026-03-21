@@ -1,38 +1,36 @@
 /**
  * AI module — multi-provider with fallback chain
- * Primary: Anthropic Claude (reasoning)
- * Budget: Venice AI (no data retention) or OpenRouter/MiniMax
+ * Primary: Anthropic Claude | Budget: Venice AI | Fallback: OpenRouter/MiniMax
  */
 import type { Env } from "./types";
 
 interface AIRequest {
   system: string;
   user: string;
-  budget?: boolean; // use budget model for high-volume calls
+  budget?: boolean;
 }
 
 export async function callAI(env: Env, req: AIRequest): Promise<string> {
-  // Try Venice first for budget calls (no data retention)
   if (req.budget && env.VENICE_API_KEY) {
     try {
-      return await callVenice(env.VENICE_API_KEY, req);
-    } catch {
-      // Fall through to Anthropic
-    }
+      return await callOpenAICompatible(
+        "https://api.venice.ai/api/v1/chat/completions",
+        env.VENICE_API_KEY, "llama-3.3-70b", req
+      );
+    } catch { /* fall through */ }
   }
 
-  // Primary: Anthropic Claude
   if (env.ANTHROPIC_API_KEY) {
     try {
       return await callAnthropic(env.ANTHROPIC_API_KEY, req);
-    } catch {
-      // Fall through to OpenRouter
-    }
+    } catch { /* fall through */ }
   }
 
-  // Fallback: OpenRouter
   if (env.OPENROUTER_API_KEY) {
-    return await callOpenRouter(env.OPENROUTER_API_KEY, req);
+    return await callOpenAICompatible(
+      "https://openrouter.ai/api/v1/chat/completions",
+      env.OPENROUTER_API_KEY, "minimax/minimax-m2.7", req
+    );
   }
 
   throw new Error("No AI provider configured");
@@ -59,15 +57,20 @@ async function callAnthropic(apiKey: string, req: AIRequest): Promise<string> {
   return data.content[0]?.text || "";
 }
 
-async function callVenice(apiKey: string, req: AIRequest): Promise<string> {
-  const res = await fetch("https://api.venice.ai/api/v1/chat/completions", {
+async function callOpenAICompatible(
+  url: string,
+  apiKey: string,
+  model: string,
+  req: AIRequest
+): Promise<string> {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "llama-3.3-70b",
+      model,
       messages: [
         { role: "system", content: req.system },
         { role: "user", content: req.user },
@@ -76,29 +79,7 @@ async function callVenice(apiKey: string, req: AIRequest): Promise<string> {
     }),
   });
 
-  if (!res.ok) throw new Error(`Venice ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-  return data.choices[0]?.message?.content || "";
-}
-
-async function callOpenRouter(apiKey: string, req: AIRequest): Promise<string> {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "minimax/minimax-m2.7",
-      messages: [
-        { role: "system", content: req.system },
-        { role: "user", content: req.user },
-      ],
-      max_tokens: 1024,
-    }),
-  });
-
-  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error(`${model} ${res.status}: ${await res.text()}`);
   const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
   return data.choices[0]?.message?.content || "";
 }

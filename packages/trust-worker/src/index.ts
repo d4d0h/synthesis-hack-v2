@@ -92,10 +92,9 @@ app.post("/chat", async (c) => {
 });
 
 // ─── Durable Object accessor ───
-async function getAgent(env: Env): Promise<TrustAgent> {
+function getAgent(env: Env): DurableObjectStub<TrustAgent> {
   const id = env.TRUST_AGENT.idFromName("trustvault-singleton");
-  const stub = env.TRUST_AGENT.get(id) as unknown as TrustAgent;
-  return stub;
+  return env.TRUST_AGENT.get(id) as DurableObjectStub<TrustAgent>;
 }
 
 export default app;

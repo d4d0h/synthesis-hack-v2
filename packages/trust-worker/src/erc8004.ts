@@ -2,203 +2,131 @@
  * ERC-8004 Onchain Routes
  *
  * Handles onchain identity registration and reputation read/write
- * via raw JSON-RPC calls to the configured chain.
+ * via JSON-RPC calls to the configured chain.
+ *
+ * NOTE: Function selectors and ABI encoding are simplified for demo.
+ * Production usage should use viem's encodeFunctionData.
  */
 import { Hono } from "hono";
 import type { Env } from "./types";
+import { computeAddress } from "./crypto";
 
-// Minimal ERC-8004 ABI fragments (function selectors)
-const ABI = {
-  // Identity Registry
-  registerAgent: "0x1a2b3c4d", // registerAgent(address,string,string)
-  getAgent: "0x5e6f7a8b",      // getAgent(address) → (string,string,bool)
-  // Reputation Registry
-  addReputation: "0x9c0d1e2f",  // addReputation(address,uint256,string)
-  getReputation: "0x3a4b5c6d",  // getReputation(address) → (uint256,uint256)
-};
+// Demo function selectors — replace with real keccak selectors for production
+const SELECTORS = {
+  registerAgent: "0x1a2b3c4d",
+  getAgent: "0x5e6f7a8b",
+  addReputation: "0x9c0d1e2f",
+  getReputation: "0x3a4b5c6d",
+} as const;
 
 export function erc8004Routes() {
   const router = new Hono<{ Bindings: Env }>();
 
-  // Check if agent is registered onchain
   router.get("/identity", async (c) => {
-    const env = c.env;
     try {
-      const result = await ethCall(env.CHAIN_RPC_URL, {
-        to: env.IDENTITY_REGISTRY,
-        data: encodeGetAgent(env.AGENT_PRIVATE_KEY),
-      });
+      const agentAddress = computeAddress(c.env.AGENT_PRIVATE_KEY);
+      const result = await jsonRpc(c.env.CHAIN_RPC_URL, "eth_call", [
+        { to: c.env.IDENTITY_REGISTRY, data: SELECTORS.getAgent + agentAddress.slice(2).padStart(64, "0") },
+        "latest",
+      ]);
       return c.json({ registered: result !== "0x", raw: result });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ registered: false, error: msg });
+      return c.json({ registered: false, error: errorMessage(e) });
     }
   });
 
-  // Register agent identity onchain (sends transaction)
   router.post("/register", async (c) => {
-    const { name, description } = await c.req.json<{
-      name: string;
-      description: string;
-    }>();
-
+    const { name, description } = await c.req.json<{ name: string; description: string }>();
     try {
-      const txHash = await sendTransaction(c.env, {
+      const txParams = await prepareTx(c.env, {
         to: c.env.IDENTITY_REGISTRY,
-        data: encodeRegisterAgent(name, description),
+        data: SELECTORS.registerAgent + encodeString(name) + encodeString(description),
       });
-      return c.json({ txHash, status: "pending" });
+      return c.json({ ...txParams, status: "prepared" });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: msg }, 500);
+      return c.json({ error: errorMessage(e) }, 500);
     }
   });
 
-  // Read reputation from onchain
   router.get("/reputation/:address", async (c) => {
     const address = c.req.param("address");
     try {
-      const result = await ethCall(c.env.CHAIN_RPC_URL, {
-        to: c.env.REPUTATION_REGISTRY,
-        data: encodeGetReputation(address),
-      });
+      const result = await jsonRpc(c.env.CHAIN_RPC_URL, "eth_call", [
+        { to: c.env.REPUTATION_REGISTRY, data: SELECTORS.getReputation + address.slice(2).padStart(64, "0") },
+        "latest",
+      ]);
       return c.json({ address, reputation: result });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ address, error: msg });
+      return c.json({ address, error: errorMessage(e) });
     }
   });
 
-  // Write reputation onchain
   router.post("/reputation", async (c) => {
     const { targetAddress, score, evidence } = await c.req.json<{
       targetAddress: string;
       score: number;
       evidence: string;
     }>();
-
     try {
-      const txHash = await sendTransaction(c.env, {
+      const txParams = await prepareTx(c.env, {
         to: c.env.REPUTATION_REGISTRY,
-        data: encodeAddReputation(targetAddress, score, evidence),
+        data: SELECTORS.addReputation +
+          targetAddress.slice(2).padStart(64, "0") +
+          score.toString(16).padStart(64, "0") +
+          encodeString(evidence),
       });
-      return c.json({ txHash, status: "pending" });
+      return c.json({ ...txParams, status: "prepared" });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: msg }, 500);
+      return c.json({ error: errorMessage(e) }, 500);
     }
   });
 
   return router;
 }
 
-// ─── Low-level JSON-RPC helpers ───
+// ─── JSON-RPC helper ───
 
-async function ethCall(
-  rpcUrl: string,
-  params: { to: string; data: string }
-): Promise<string> {
+async function jsonRpc(rpcUrl: string, method: string, params: unknown[]): Promise<string> {
   const res = await fetch(rpcUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "eth_call",
-      params: [{ to: params.to, data: params.data }, "latest"],
-    }),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
   const json = (await res.json()) as { result?: string; error?: { message: string } };
   if (json.error) throw new Error(json.error.message);
   return json.result || "0x";
 }
 
-async function sendTransaction(
+/**
+ * Prepare transaction params (nonce + gas estimate).
+ * Actual signing should be done via viem in the scripts package.
+ */
+async function prepareTx(
   env: Env,
   params: { to: string; data: string }
-): Promise<string> {
-  // Get nonce
-  const nonceRes = await fetch(env.CHAIN_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "eth_getTransactionCount",
-      params: [addressFromKey(env.AGENT_PRIVATE_KEY), "pending"],
-    }),
-  });
-  const nonceJson = (await nonceRes.json()) as { result: string };
+): Promise<{ from: string; to: string; data: string; nonce: string; gasEstimate: string }> {
+  const fromAddress = computeAddress(env.AGENT_PRIVATE_KEY);
 
-  // For full signing, use viem in scripts package.
-  // This is a simplified version that delegates to the RPC for unsigned tx estimation.
-  const estimateRes = await fetch(env.CHAIN_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "eth_estimateGas",
-      params: [
-        {
-          from: addressFromKey(env.AGENT_PRIVATE_KEY),
-          to: params.to,
-          data: params.data,
-          nonce: nonceJson.result,
-        },
-      ],
-    }),
-  });
-  const gasJson = (await estimateRes.json()) as { result: string };
+  const [nonce, gasEstimate] = await Promise.all([
+    jsonRpc(env.CHAIN_RPC_URL, "eth_getTransactionCount", [fromAddress, "pending"]),
+    jsonRpc(env.CHAIN_RPC_URL, "eth_estimateGas", [
+      { from: fromAddress, to: params.to, data: params.data },
+    ]),
+  ]);
 
-  // In production, sign with viem and send via eth_sendRawTransaction.
-  // For hackathon, return the prepared tx params for the scripts to sign and send.
-  return `0x_pending_tx_nonce_${nonceJson.result}_gas_${gasJson.result}`;
+  return { from: fromAddress, to: params.to, data: params.data, nonce, gasEstimate };
 }
 
-function addressFromKey(privateKey: string): string {
-  const key = privateKey.startsWith("0x") ? privateKey.slice(2) : privateKey;
-  let hash = 0n;
-  for (let i = 0; i < key.length; i++) {
-    hash = ((hash << 5n) - hash + BigInt(key.charCodeAt(i))) & ((1n << 256n) - 1n);
-  }
-  return `0x${hash.toString(16).padStart(40, "0").slice(0, 40)}`;
-}
-
-// ─── ABI encoding helpers (minimal, no ethers dependency) ───
-
-function encodeRegisterAgent(name: string, description: string): string {
-  return ABI.registerAgent + encodeString(name) + encodeString(description);
-}
-
-function encodeGetAgent(addressOrKey: string): string {
-  const addr = addressOrKey.startsWith("0x") && addressOrKey.length === 42
-    ? addressOrKey
-    : addressFromKey(addressOrKey);
-  return ABI.getAgent + addr.slice(2).padStart(64, "0");
-}
-
-function encodeGetReputation(address: string): string {
-  return ABI.getReputation + address.slice(2).padStart(64, "0");
-}
-
-function encodeAddReputation(
-  address: string,
-  score: number,
-  evidence: string
-): string {
-  return (
-    ABI.addReputation +
-    address.slice(2).padStart(64, "0") +
-    score.toString(16).padStart(64, "0") +
-    encodeString(evidence)
-  );
-}
-
+/** Simplified ABI string encoding for demo — use viem's encodeAbiParameters in production */
 function encodeString(s: string): string {
-  const hex = Array.from(new TextEncoder().encode(s))
+  const bytes = new TextEncoder().encode(s);
+  const hex = Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  const len = (s.length).toString(16).padStart(64, "0");
+  const len = bytes.length.toString(16).padStart(64, "0");
   return len + hex.padEnd(Math.ceil(hex.length / 64) * 64, "0");
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }

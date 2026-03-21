@@ -5,4 +5,5 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 PEER_NAME = "VerifyBot"
+PEER_ADDRESS = "0x00000000000000000000000000000000deadbeef"
 TRUSTVAULT_URL = "http://localhost:8787"
