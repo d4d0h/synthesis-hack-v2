@@ -1,8 +1,8 @@
 /**
- * TrustVault v2 — Main Worker Entry
+ * TrustVault v2.1 — Open Trust Resolution Protocol
  *
- * Cloudflare Worker + Durable Object agent that maintains a verifiable
- * trust resume using ERC-8004 onchain identity and attestations.
+ * Give it any agent URL + task context → get a verdict, capability analysis,
+ * risk-adjusted safeguards, AI reasoning, and a signed receipt.
  */
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -22,73 +22,82 @@ app.get("/.well-known/agent.json", (c) => c.json(agentCard(c.env)));
 
 // ─── Health ───
 app.get("/health", (c) =>
-  c.json({ status: "ok", agent: "TrustVault", version: "2.0.0", timestamp: Date.now() })
+  c.json({
+    status: "ok",
+    agent: "TrustVault",
+    version: "2.1.0",
+    features: [
+      "trust-resolution-protocol",
+      "task-aware-verdicts",
+      "signed-receipts",
+      "sybil-detection",
+      "erc8004-identity",
+      "attestation-management",
+    ],
+    timestamp: Date.now(),
+  })
 );
+
+// ─── Trust Resolution (the key feature) ───
+app.post("/resolve", async (c) => {
+  const body = await c.req.json();
+  const agent = getAgent(c.env);
+  return c.json(await agent.resolve(body));
+});
+
+app.get("/resolution-log", async (c) => {
+  const agent = getAgent(c.env);
+  return c.json(await agent.getResolutionLog());
+});
 
 // ─── Trust Resume (public, read-only) ───
 app.get("/trust/resume", async (c) => {
-  const agent = await getAgent(c.env);
+  const agent = getAgent(c.env);
   return c.json(await agent.getResume());
 });
 
 app.get("/trust/resume/:address", async (c) => {
-  const agent = await getAgent(c.env);
-  const address = c.req.param("address");
-  return c.json(await agent.getRemoteResume(address));
+  const agent = getAgent(c.env);
+  return c.json(await agent.getRemoteResume(c.req.param("address")));
 });
 
 // ─── Attestations ───
 app.post("/trust/attest", async (c) => {
-  const body = await c.req.json<{
-    targetAddress: string;
-    fromAddress?: string;
-    category: string;
-    score: number;
-    evidence?: string;
-  }>();
+  const body = await c.req.json();
   const agent = getAgent(c.env);
   return c.json(await agent.handleAttestation(body));
 });
 
 app.get("/trust/attestations", async (c) => {
-  const agent = await getAgent(c.env);
+  const agent = getAgent(c.env);
   return c.json(await agent.getAttestations());
 });
 
 app.get("/trust/attestations/:address", async (c) => {
-  const agent = await getAgent(c.env);
-  const address = c.req.param("address");
-  return c.json(await agent.getAttestationsFor(address));
+  const agent = getAgent(c.env);
+  return c.json(await agent.getAttestationsFor(c.req.param("address")));
 });
 
 // ─── Cooperation ───
 app.post("/trust/cooperate", async (c) => {
-  const body = await c.req.json<{
-    peerAddress: string;
-    peerUrl: string;
-    task: string;
-  }>();
-  const agent = await getAgent(c.env);
+  const body = await c.req.json();
+  const agent = getAgent(c.env);
   return c.json(await agent.evaluateCooperation(body));
 });
 
 app.post("/trust/cooperate/accept", async (c) => {
-  const body = await c.req.json<{
-    fromAddress: string;
-    task: string;
-    trustScore: number;
-  }>();
-  const agent = await getAgent(c.env);
+  const body = await c.req.json();
+  const agent = getAgent(c.env);
   return c.json(await agent.handleCooperationRequest(body));
 });
 
 // ─── ERC-8004 onchain routes ───
 app.route("/erc8004", erc8004Routes());
 
-// ─── AI Chat (for demos / Synthesis judges) ───
+// ─── AI Chat ───
 app.post("/chat", async (c) => {
   const { message } = await c.req.json<{ message: string }>();
-  const agent = await getAgent(c.env);
+  const agent = getAgent(c.env);
   return c.json(await agent.chat(message));
 });
 

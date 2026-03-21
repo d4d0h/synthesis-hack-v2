@@ -3,7 +3,7 @@
  *
  * Persistent, stateful agent that maintains trust resume across requests.
  * Uses Durable Object storage for attestation history, cooperation records,
- * and onchain identity state.
+ * onchain identity state, and trust resolution cache.
  */
 import { DurableObject } from "cloudflare:workers";
 import type {
@@ -13,12 +13,18 @@ import type {
   CooperationRecord,
   CooperationDecision,
   AgentState,
+  ResolveRequest,
+  ResolveResult,
+  CachedResolution,
 } from "./types";
 import { computeAddress } from "./crypto";
 import { callAI } from "./ai";
+import { resolveAgent } from "./resolve";
 
 const MAX_ATTESTATIONS = 500;
 const MAX_COOPERATION_RECORDS = 200;
+const MAX_RESOLUTION_LOG = 100;
+const RESOLVE_CACHE_TTL_MS = 300_000; // 5 minutes
 
 const DEFAULT_STATE: AgentState = {
   address: "",
@@ -27,6 +33,8 @@ const DEFAULT_STATE: AgentState = {
   attestationsReceived: [],
   cooperationHistory: [],
   onchainRegistered: false,
+  resolveCache: {},
+  resolutionLog: [],
 };
 
 export class TrustAgent extends DurableObject<Env> {
@@ -37,7 +45,12 @@ export class TrustAgent extends DurableObject<Env> {
     if (this.initialized) return;
     const stored = await this.ctx.storage.get<AgentState>("state");
     if (stored) {
-      this.state = stored;
+      this.state = {
+        ...DEFAULT_STATE,
+        ...stored,
+        resolveCache: stored.resolveCache ?? {},
+        resolutionLog: stored.resolutionLog ?? [],
+      };
     } else {
       const address = computeAddress(this.env.AGENT_PRIVATE_KEY);
       this.state = { ...DEFAULT_STATE, address, name: this.env.AGENT_NAME || "TrustVault" };
@@ -50,7 +63,6 @@ export class TrustAgent extends DurableObject<Env> {
     await this.ctx.storage.put("state", this.state);
   }
 
-  /** Cap arrays to prevent exceeding DO storage limits */
   private trimArrays(): void {
     if (this.state.attestationsGiven.length > MAX_ATTESTATIONS) {
       this.state.attestationsGiven = this.state.attestationsGiven.slice(-MAX_ATTESTATIONS);
@@ -61,7 +73,56 @@ export class TrustAgent extends DurableObject<Env> {
     if (this.state.cooperationHistory.length > MAX_COOPERATION_RECORDS) {
       this.state.cooperationHistory = this.state.cooperationHistory.slice(-MAX_COOPERATION_RECORDS);
     }
+    if (this.state.resolutionLog.length > MAX_RESOLUTION_LOG) {
+      this.state.resolutionLog = this.state.resolutionLog.slice(-MAX_RESOLUTION_LOG);
+    }
   }
+
+  // ─── Trust Resolution ───────────────────────────────────────
+
+  async resolve(req: ResolveRequest): Promise<ResolveResult> {
+    await this.init();
+
+    // Check cache
+    const cacheKey = `${req.agentUrl}:${req.task?.type ?? "general"}`;
+    const cached = this.state.resolveCache[cacheKey];
+    if (cached && new Date(cached.expiresAt) > new Date()) {
+      return cached.result;
+    }
+
+    // Run resolution pipeline
+    const result = await resolveAgent(req, { env: this.env, state: this.state });
+
+    // Cache result
+    this.state.resolveCache[cacheKey] = {
+      result,
+      expiresAt: new Date(Date.now() + RESOLVE_CACHE_TTL_MS).toISOString(),
+    } satisfies CachedResolution;
+
+    // Log resolution
+    this.state.resolutionLog.push({
+      id: result.receipt.id,
+      targetAgent: req.agentUrl,
+      verdict: result.verdict,
+      trustScore: result.trustScore,
+      task: req.task?.type,
+      timestamp: result.receipt.resolvedAt,
+    });
+    this.trimArrays();
+    await this.persist();
+
+    return result;
+  }
+
+  async getResolutionLog() {
+    await this.init();
+    return {
+      resolutions: this.state.resolutionLog,
+      count: this.state.resolutionLog.length,
+    };
+  }
+
+  // ─── Trust Resume ───────────────────────────────────────────
 
   async getResume(): Promise<TrustResume> {
     await this.init();
@@ -89,11 +150,8 @@ export class TrustAgent extends DurableObject<Env> {
     return this.buildResume(address, "unknown", attestations);
   }
 
-  /**
-   * Handle an attestation — routes to given or received based on context.
-   * If fromAddress is provided and targetAddress is this agent, it's incoming (received).
-   * Otherwise it's outgoing (given by this agent about someone else).
-   */
+  // ─── Attestations ──────────────────────────────────────────
+
   async handleAttestation(params: {
     targetAddress: string;
     fromAddress?: string;
@@ -125,9 +183,11 @@ export class TrustAgent extends DurableObject<Env> {
     this.trimArrays();
     await this.persist();
 
-    const trustScore = this.computeTrustScore(this.state.attestationsReceived);
-
-    return { attestation, trustScore, direction: isIncoming ? "received" : "given" };
+    return {
+      attestation,
+      trustScore: this.computeTrustScore(this.state.attestationsReceived),
+      direction: isIncoming ? "received" : "given",
+    };
   }
 
   async receiveAttestation(attestation: Attestation): Promise<{ accepted: boolean }> {
@@ -142,10 +202,7 @@ export class TrustAgent extends DurableObject<Env> {
 
   async getAttestations(): Promise<{ given: Attestation[]; received: Attestation[] }> {
     await this.init();
-    return {
-      given: this.state.attestationsGiven,
-      received: this.state.attestationsReceived,
-    };
+    return { given: this.state.attestationsGiven, received: this.state.attestationsReceived };
   }
 
   async getAttestationsFor(address: string): Promise<Attestation[]> {
@@ -157,28 +214,22 @@ export class TrustAgent extends DurableObject<Env> {
     ];
   }
 
+  // ─── Cooperation ───────────────────────────────────────────
+
   async evaluateCooperation(params: {
     peerAddress: string;
     peerUrl: string;
     task: string;
-  }): Promise<{
-    decision: CooperationDecision;
-    reason: string;
-    peerTrustScore: number;
-  }> {
+  }): Promise<{ decision: CooperationDecision; reason: string; peerTrustScore: number }> {
     await this.init();
 
     let peerResume: TrustResume | null = null;
     try {
       const res = await fetch(`${params.peerUrl}/trust/resume`);
       if (res.ok) peerResume = await res.json();
-    } catch {
-      // Peer unreachable
-    }
+    } catch { /* peer unreachable */ }
 
     const peerTrustScore = peerResume?.trustScore ?? 0;
-
-    // AI-enhanced cooperation decision
     let decision: CooperationDecision = "negotiate";
     let reason = "Defaulting to negotiation.";
 
@@ -204,7 +255,6 @@ export class TrustAgent extends DurableObject<Env> {
       }
       reason = parsed.reason || reason;
     } catch {
-      // Score-based heuristic fallback
       if (peerTrustScore >= 70) {
         decision = "accept";
         reason = `Trust score ${peerTrustScore} exceeds acceptance threshold.`;
@@ -219,7 +269,6 @@ export class TrustAgent extends DurableObject<Env> {
 
     this.recordCooperation(params.peerAddress, params.task, decision, peerTrustScore);
     await this.persist();
-
     return { decision, reason, peerTrustScore };
   }
 
@@ -227,11 +276,7 @@ export class TrustAgent extends DurableObject<Env> {
     fromAddress: string;
     task: string;
     trustScore: number;
-  }): Promise<{
-    accepted: boolean;
-    counterOffer?: string;
-    reason: string;
-  }> {
+  }): Promise<{ accepted: boolean; counterOffer?: string; reason: string }> {
     await this.init();
 
     const decision: CooperationDecision = params.trustScore >= 60 ? "accept" : "decline";
@@ -241,13 +286,14 @@ export class TrustAgent extends DurableObject<Env> {
     if (decision === "accept") {
       return { accepted: true, reason: "Trust score meets cooperation threshold." };
     }
-
     return {
       accepted: false,
       counterOffer: "Provide additional attestations from trusted agents.",
       reason: `Trust score ${params.trustScore} is below our cooperation threshold of 60.`,
     };
   }
+
+  // ─── Chat ──────────────────────────────────────────────────
 
   async chat(message: string): Promise<{ reply: string }> {
     await this.init();
@@ -256,21 +302,24 @@ export class TrustAgent extends DurableObject<Env> {
     try {
       const reply = await callAI(this.env, {
         system:
-          `You are TrustVault, an autonomous trust-evaluating agent. ` +
+          `You are TrustVault, an open trust resolution protocol for the agent economy. ` +
           `Your address: ${this.state.address}. Trust score: ${trustScore}. ` +
           `Attestations received: ${attestationCount}. ` +
-          `You help agents build verifiable trust profiles using ERC-8004 onchain identity. ` +
+          `Resolutions performed: ${this.state.resolutionLog.length}. ` +
+          `You resolve trust for any agent: give you a URL + task context, you return whether cooperation is safe. ` +
           `Be concise, professional, and data-driven.`,
         user: message,
       });
       return { reply };
     } catch {
       return {
-        reply: `I'm TrustVault. My trust score is ${trustScore} with ${attestationCount} attestations received. ` +
-          `AI provider not configured — operating in data-only mode.`,
+        reply: `I'm TrustVault. Trust score: ${trustScore}, ${attestationCount} attestations, ` +
+          `${this.state.resolutionLog.length} resolutions performed. AI provider not configured.`,
       };
     }
   }
+
+  // ─── Onchain ───────────────────────────────────────────────
 
   async setOnchainRegistered(txHash: string, tokenId?: string): Promise<void> {
     await this.init();
@@ -280,6 +329,8 @@ export class TrustAgent extends DurableObject<Env> {
     await this.persist();
   }
 
+  // ─── Private helpers ───────────────────────────────────────
+
   private recordCooperation(
     peerAddress: string,
     task: string,
@@ -287,36 +338,27 @@ export class TrustAgent extends DurableObject<Env> {
     peerTrustScore: number,
   ): void {
     this.state.cooperationHistory.push({
-      peerAddress,
-      task,
-      decision,
-      peerTrustScore,
-      timestamp: Date.now(),
+      peerAddress, task, decision, peerTrustScore, timestamp: Date.now(),
     });
     this.trimArrays();
   }
 
   private computeTrustScore(attestations: Attestation[]): number {
     if (attestations.length === 0) return 0;
-
-    const avgScore =
-      attestations.reduce((sum, a) => sum + a.score, 0) / attestations.length;
+    const avgScore = attestations.reduce((sum, a) => sum + a.score, 0) / attestations.length;
     const volumeBonus = Math.min(15, attestations.length * 2);
     const categories = new Set(attestations.map((a) => a.category));
     const diversityBonus = Math.min(10, categories.size * 3);
     const onchainBonus = this.state.onchainRegistered ? 5 : 0;
-
     return Math.min(100, Math.round(avgScore + volumeBonus + diversityBonus + onchainBonus));
   }
 
   private aggregateCategories(
-    attestations: Attestation[]
+    attestations: Attestation[],
   ): Record<string, { avgScore: number; count: number }> {
     const categories: Record<string, { avgScore: number; count: number }> = {};
     for (const a of attestations) {
-      if (!categories[a.category]) {
-        categories[a.category] = { avgScore: 0, count: 0 };
-      }
+      if (!categories[a.category]) categories[a.category] = { avgScore: 0, count: 0 };
       const cat = categories[a.category];
       cat.avgScore = (cat.avgScore * cat.count + a.score) / (cat.count + 1);
       cat.count++;

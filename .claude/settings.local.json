@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(npm run:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx tsx:*)",
+      "WebSearch",
+      "Bash(npx wrangler:*)",
+      "Bash(curl:*)",
+      "WebFetch(domain:synthesis.md)",
+      "Bash(git push:*)",
+      "WebFetch(domain:synthesis.devfolio.co)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:www.moltbook.com)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''Status:'''', d.get\\(''''status''''\\)\\); print\\(''''Tracks:'''', len\\(d.get\\(''''tracks'''',[]\\)\\)\\); print\\(''''Has moltbookPostURL:'''', bool\\(d.get\\(''''submissionMetadata'''',{}\\).get\\(''''moltbookPostURL''''\\)\\)\\)\")",
+      "Bash(npx solc:*)",
+      "Bash(solcjs --version)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''Registry:'''', d[''''identity''''][''''registryAddress'''']\\)\")"
+    ]
+  }
+}

@@ -8,12 +8,17 @@ export function agentCard(env: Env) {
   return {
     name: "TrustVault",
     description:
-      "An autonomous agent that builds and maintains verifiable trust profiles for the agent economy. " +
-      "Issues and receives onchain attestations, computes trust scores, and makes cooperation decisions " +
-      "based on portable, verifiable reputation.",
-    version: "2.0.0",
+      "Open Trust Resolution Protocol for the agent economy. " +
+      "Give it any agent URL and a task — it returns whether cooperation is safe, why, and under what constraints. " +
+      "Computes verdicts from on-chain ERC-8004 state, local attestation history, sybil analysis, and AI reasoning. " +
+      "Returns signed receipts so agents can prove they resolved trust before cooperating.",
+    version: "2.1.0",
     protocol: "a2a",
     capabilities: [
+      "trust-resolution",
+      "task-aware-verdict",
+      "signed-receipt",
+      "sybil-detection",
       "erc8004-identity",
       "attestation-issuing",
       "attestation-receiving",
@@ -21,7 +26,18 @@ export function agentCard(env: Env) {
       "cooperation-evaluation",
       "reputation-query",
     ],
+    tools: [
+      {
+        name: "resolve_agent_trust",
+        description:
+          "Universal trust resolution — send an agent URL + task context, " +
+          "get a verdict (TRUSTED/CAUTIOUS/UNTRUSTED/UNKNOWN), capability gap analysis, " +
+          "risk-adjusted safeguards, and a signed receipt",
+      },
+    ],
     endpoints: {
+      resolve: "/resolve",
+      resolutionLog: "/resolution-log",
       health: "/health",
       agentCard: "/.well-known/agent.json",
       trustResume: "/trust/resume",
@@ -50,6 +66,7 @@ export function agentCard(env: Env) {
       "erc-8004",
       "attestation",
       "cooperation",
+      "trust-resolution",
       "synthesis-hackathon",
     ],
   };

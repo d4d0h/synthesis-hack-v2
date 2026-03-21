@@ -75,4 +75,81 @@ export interface AgentState {
   onchainRegistered: boolean;
   onchainTxHash?: string;
   onchainTokenId?: string;
+  resolveCache: Record<string, CachedResolution>;
+  resolutionLog: ResolutionLogEntry[];
+}
+
+// ── Resolution types ────────────────────────────────────────────────────
+
+export type Verdict = "TRUSTED" | "CAUTIOUS" | "UNTRUSTED" | "UNKNOWN";
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+
+export interface ResolveRequest {
+  agentUrl: string;
+  task?: {
+    type: string;
+    description?: string;
+    riskLevel: RiskLevel;
+    requiredCapabilities: string[];
+    valueAtStake?: string;
+  };
+}
+
+export interface TaskFit {
+  capabilityMatch: string[];
+  capabilityGap: string[];
+  riskAssessment: RiskLevel;
+  safeguards: string[];
+}
+
+export interface IdentityReport {
+  reachable: boolean;
+  hasAgentCard: boolean;
+  name: string | null;
+  capabilities: string[];
+  erc8004Registered: boolean;
+}
+
+export interface SybilIndicators {
+  selfAttestationDetected: boolean;
+  attestationVelocityNormal: boolean;
+  uniqueAttestorRatio: number;
+}
+
+export interface ResolutionReceipt {
+  id: string;
+  resolvedAt: string;
+  expiresAt: string;
+  resolver: string;
+  targetAgent: string;
+  digest: string;
+}
+
+export interface ResolveResult {
+  verdict: Verdict;
+  confidence: number;
+  trustScore: number;
+  taskFit: TaskFit;
+  report: {
+    identity: IdentityReport;
+    onchainReputation: { feedbackCount: number; averageScore: number };
+    localTrust: { directAttestations: number; averageScore: number; categories: string[] };
+    sybilIndicators: SybilIndicators;
+    reasoning: string;
+  };
+  receipt: ResolutionReceipt;
+}
+
+export interface CachedResolution {
+  result: ResolveResult;
+  expiresAt: string;
+}
+
+export interface ResolutionLogEntry {
+  id: string;
+  targetAgent: string;
+  verdict: Verdict;
+  trustScore: number;
+  task?: string;
+  timestamp: string;
 }
