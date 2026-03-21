@@ -9,6 +9,7 @@ import { cors } from "hono/cors";
 import { TrustAgent } from "./agent";
 import { agentCard } from "./agent-card";
 import { erc8004Routes } from "./erc8004";
+import { renderUI } from "./ui";
 import type { Env } from "./types";
 
 export { TrustAgent };
@@ -16,6 +17,12 @@ export { TrustAgent };
 const app = new Hono<{ Bindings: Env }>();
 
 app.use("*", cors());
+
+// ─── Landing Page ───
+app.get("/", (c) => {
+  const base = new URL(c.req.url).origin;
+  return c.html(renderUI(base));
+});
 
 // ─── Agent Card (ERC-8004 / A2A discovery) ───
 app.get("/.well-known/agent.json", (c) => c.json(agentCard(c.env)));
