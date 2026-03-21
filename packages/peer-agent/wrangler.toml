@@ -1,0 +1,8 @@
+name = "trustvault-peer"
+main = "src/index.ts"
+compatibility_date = "2025-03-14"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+PEER_NAME = "VerifyBot"
+TRUSTVAULT_URL = "http://localhost:8787"

@@ -1,0 +1,26 @@
+name = "trustvault-agent"
+main = "src/index.ts"
+compatibility_date = "2025-03-14"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "TRUST_AGENT", class_name = "TrustAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["TrustAgent"]
+
+[vars]
+AGENT_NAME = "TrustVault"
+CHAIN_ID = "11155111"
+
+# [secrets] — set via `wrangler secret put <KEY>`
+# ANTHROPIC_API_KEY
+# VENICE_API_KEY
+# AGENT_PRIVATE_KEY
+# CHAIN_RPC_URL
+# IDENTITY_REGISTRY
+# REPUTATION_REGISTRY
+# SYNTH_API_KEY

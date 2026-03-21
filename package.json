@@ -1,0 +1,23 @@
+{
+  "name": "trustvault-v2",
+  "version": "2.0.0",
+  "private": true,
+  "description": "TrustVault — Verifiable Trust Resume Agent for the Agent Economy (Synthesis Hackathon)",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "cd packages/trust-worker && npm run dev",
+    "dev:peer": "cd packages/peer-agent && npm run dev",
+    "deploy": "cd packages/trust-worker && npm run deploy",
+    "deploy:peer": "cd packages/peer-agent && npm run deploy",
+    "setup": "cd packages/scripts && npx tsx src/setup-wallets.ts",
+    "register": "cd packages/scripts && npx tsx src/register-erc8004.ts",
+    "demo": "cd packages/scripts && npx tsx src/demo-cooperation.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "wrangler": "^4.14.0"
+  }
+}
