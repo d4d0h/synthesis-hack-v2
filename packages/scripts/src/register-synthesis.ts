@@ -37,8 +37,8 @@ async function main() {
     agentHarness: "claude-code",
     model: "claude-opus-4-6",
     humanInfo: {
-      name: "FILL_IN",        // ← Human must fill this
-      email: "FILL_IN",       // ← Human must fill this
+      name: "Raul Calvo",
+      email: "raul@unbrained.club",
       socialMediaHandle: "",   // ← Optional
       background: "builder",
       cryptoExperience: "yes",
