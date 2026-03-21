@@ -11,12 +11,12 @@ import { Hono } from "hono";
 import type { Env } from "./types";
 import { computeAddress } from "./crypto";
 
-// Demo function selectors — replace with real keccak selectors for production
+// keccak256 function selectors for deployed contracts
 const SELECTORS = {
-  registerAgent: "0x1a2b3c4d",
-  getAgent: "0x5e6f7a8b",
-  addReputation: "0x9c0d1e2f",
-  getReputation: "0x3a4b5c6d",
+  registerAgent: "0x56a2d660",
+  getAgent: "0xfb3551ff",
+  addReputation: "0x3bdb022b",
+  getReputation: "0x9c89a0e2",
 } as const;
 
 export function erc8004Routes() {
@@ -86,7 +86,7 @@ export function erc8004Routes() {
 
 // ─── JSON-RPC helper ───
 
-async function jsonRpc(rpcUrl: string, method: string, params: unknown[]): Promise<string> {
+export async function jsonRpc(rpcUrl: string, method: string, params: unknown[]): Promise<string> {
   const res = await fetch(rpcUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

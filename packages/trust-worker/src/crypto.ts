@@ -1,9 +1,16 @@
 /**
- * Lightweight crypto utilities for EVM address derivation.
- * Uses a deterministic hash for demo — real derivation via viem in scripts package.
+ * Lightweight crypto utilities.
  */
 
-/** Derive a deterministic demo address from a hex private key */
+export function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function sha256Hex(input: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return toHex(new Uint8Array(bytes));
+}
+
 export function computeAddress(privateKey: string): string {
   const key = privateKey.startsWith("0x") ? privateKey.slice(2) : privateKey;
   const hash = deterministicHash(key);

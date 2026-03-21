@@ -19,7 +19,8 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''Status:'''', d.get\\(''''status''''\\)\\); print\\(''''Tracks:'''', len\\(d.get\\(''''tracks'''',[]\\)\\)\\); print\\(''''Has moltbookPostURL:'''', bool\\(d.get\\(''''submissionMetadata'''',{}\\).get\\(''''moltbookPostURL''''\\)\\)\\)\")",
       "Bash(npx solc:*)",
       "Bash(solcjs --version)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''Registry:'''', d[''''identity''''][''''registryAddress'''']\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''Registry:'''', d[''''identity''''][''''registryAddress'''']\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''Verdict:'''', d[''''verdict'''']\\); print\\(''''Score:'''', d[''''trustScore'''']\\); print\\(''''Confidence:'''', d[''''confidence'''']\\); print\\(''''Cap match:'''', d[''''taskFit''''][''''capabilityMatch'''']\\); print\\(''''Cap gap:'''', d[''''taskFit''''][''''capabilityGap'''']\\); print\\(''''Safeguards:'''', len\\(d[''''taskFit''''][''''safeguards'''']\\)\\); print\\(''''Receipt:'''', d[''''receipt''''][''''id''''][:8]+''''...''''\\)\")"
     ]
   }
 }

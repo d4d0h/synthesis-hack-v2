@@ -83,23 +83,28 @@ export class TrustAgent extends DurableObject<Env> {
   async resolve(req: ResolveRequest): Promise<ResolveResult> {
     await this.init();
 
-    // Check cache
-    const cacheKey = `${req.agentUrl}:${req.task?.type ?? "general"}`;
+    // Cache key includes riskLevel to avoid returning wrong verdict
+    const cacheKey = `${req.agentUrl}:${req.task?.type ?? "general"}:${req.task?.riskLevel ?? "medium"}`;
     const cached = this.state.resolveCache[cacheKey];
-    if (cached && new Date(cached.expiresAt) > new Date()) {
+    const now = Date.now();
+    if (cached && new Date(cached.expiresAt).getTime() > now) {
       return cached.result;
     }
 
-    // Run resolution pipeline
+    // Evict stale cache entries
+    for (const key of Object.keys(this.state.resolveCache)) {
+      if (new Date(this.state.resolveCache[key].expiresAt).getTime() <= now) {
+        delete this.state.resolveCache[key];
+      }
+    }
+
     const result = await resolveAgent(req, { env: this.env, state: this.state });
 
-    // Cache result
     this.state.resolveCache[cacheKey] = {
       result,
-      expiresAt: new Date(Date.now() + RESOLVE_CACHE_TTL_MS).toISOString(),
+      expiresAt: new Date(now + RESOLVE_CACHE_TTL_MS).toISOString(),
     } satisfies CachedResolution;
 
-    // Log resolution
     this.state.resolutionLog.push({
       id: result.receipt.id,
       targetAgent: req.agentUrl,

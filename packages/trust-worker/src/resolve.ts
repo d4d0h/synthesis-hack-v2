@@ -1,16 +1,20 @@
 /**
- * resolve.ts — Trust Resolution Engine
+ * Trust Resolution Engine
  *
- * Pipeline: fetch card → check ERC-8004 → check local attestations →
- *           sybil analysis → task-fit evaluation → composite score →
- *           AI reasoning → verdict + signed receipt
+ * Pipeline: fetch card → check onchain → analyze attestations →
+ *           task-fit → composite score → AI reasoning → verdict + receipt
  */
 import type {
   ResolveRequest, ResolveResult, Verdict, RiskLevel,
   Attestation, AgentState, IdentityReport, SybilIndicators,
 } from "./types";
 import { callAI } from "./ai";
+import { jsonRpc } from "./erc8004";
+import { sha256Hex } from "./crypto";
 import type { Env } from "./types";
+
+const VERSION = "TrustVault/2.1.0";
+const SELECTORS = { getReputation: "0x9c89a0e2" } as const;
 
 interface ResolveContext {
   env: Env;
@@ -22,140 +26,42 @@ export async function resolveAgent(
   ctx: ResolveContext,
 ): Promise<ResolveResult> {
   const { agentUrl, task } = req;
+  const normalizedUrl = agentUrl.replace(/\/$/, "");
 
-  // ── Step 1: Fetch agent card ─────────────────────────────────
-  const identity: IdentityReport = {
-    reachable: false,
-    hasAgentCard: false,
-    name: null,
-    capabilities: [],
-    erc8004Registered: false,
-  };
+  // Fetch agent card
+  const identity = await fetchAgentCard(normalizedUrl);
 
-  try {
-    const cardRes = await fetch(
-      `${agentUrl.replace(/\/$/, "")}/.well-known/agent.json`,
-      { signal: AbortSignal.timeout(5000) },
-    );
-    identity.reachable = true;
-    if (cardRes.ok) {
-      const card = (await cardRes.json()) as {
-        name?: string;
-        capabilities?: string[];
-        tags?: string[];
-        identity?: { standard?: string };
-      };
-      identity.hasAgentCard = true;
-      identity.name = card.name ?? null;
-      identity.capabilities = card.capabilities ?? card.tags ?? [];
-      identity.erc8004Registered = card.identity?.standard === "ERC-8004";
-    }
-  } catch {
-    // Agent unreachable — identity stays at defaults
-  }
+  // Query onchain reputation (uses address from agent's wallet, not name)
+  const agentAddress = ctx.state.address;
+  const onchainReputation = await queryReputation(ctx.env, agentAddress);
 
-  // ── Step 2: Query onchain reputation via JSON-RPC ────────────
-  let onchainReputation = { feedbackCount: 0, averageScore: 0 };
-  try {
-    const res = await fetch(ctx.env.CHAIN_RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1, method: "eth_call",
-        params: [{
-          to: ctx.env.REPUTATION_REGISTRY,
-          data: "0x9c89a0e2" + (identity.name ?? "").padStart(64, "0"),
-        }, "latest"],
-      }),
-    });
-    const rpc = (await res.json()) as { result?: string };
-    if (rpc.result && rpc.result !== "0x" && rpc.result.length > 66) {
-      const score = parseInt(rpc.result.slice(2, 66), 16);
-      const count = parseInt(rpc.result.slice(66, 130), 16);
-      if (count > 0) {
-        onchainReputation = { feedbackCount: count, averageScore: score };
-      }
-    }
-  } catch { /* non-fatal */ }
-
-  // ── Step 3: Check local attestation history ──────────────────
-  const targetName = (identity.name ?? "").toLowerCase();
-  const targetUrl = agentUrl.toLowerCase();
-  const directAttestations = ctx.state.attestationsReceived.filter(
-    (a) =>
-      a.from.toLowerCase() === targetUrl ||
-      a.from.toLowerCase() === targetName ||
-      a.to.toLowerCase() === targetUrl ||
-      a.to.toLowerCase() === targetName,
+  // Single-pass attestation analysis
+  const { localTrust, sybilIndicators } = analyzeAttestations(
+    ctx.state.attestationsReceived, agentUrl, identity.name,
   );
-  const localTrust = {
-    directAttestations: directAttestations.length,
-    averageScore: directAttestations.length > 0
-      ? Math.round(directAttestations.reduce((s, a) => s + a.score, 0) / directAttestations.length)
-      : 0,
-    categories: [...new Set(directAttestations.map((a) => a.category))],
-  };
 
-  // ── Step 4: Sybil indicators ─────────────────────────────────
-  const allAttestations = ctx.state.attestationsReceived;
-  const selfAttestations = allAttestations.filter((a) => a.from === a.to);
-  const oneHourAgo = Date.now() - 3_600_000;
-  const recentBurst = allAttestations.filter((a) => a.timestamp > oneHourAgo);
-  const uniqueAttestors = new Set(allAttestations.map((a) => a.from)).size;
+  // Task-fit evaluation
+  const required = task?.requiredCapabilities ?? [];
+  const capabilityMatch = required.filter((cap) => {
+    const capLower = cap.toLowerCase();
+    return identity.capabilities.some((c) => {
+      const cLower = c.toLowerCase();
+      return cLower.includes(capLower) || capLower.includes(cLower);
+    });
+  });
+  const capabilityGap = required.filter((cap) => !capabilityMatch.includes(cap));
 
-  const sybilIndicators: SybilIndicators = {
-    selfAttestationDetected: selfAttestations.length > 0,
-    attestationVelocityNormal: recentBurst.length <= 10,
-    uniqueAttestorRatio: allAttestations.length > 0
-      ? Math.round((uniqueAttestors / allAttestations.length) * 100) / 100
-      : 1.0,
-  };
+  // Composite score
+  const trustScore = computeCompositeScore(
+    onchainReputation, localTrust, identity, capabilityMatch, required, task, sybilIndicators,
+  );
 
-  // ── Step 5: Task-fit evaluation ──────────────────────────────
-  const capabilityMatch = task?.requiredCapabilities.filter((cap) =>
-    identity.capabilities.some(
-      (c) => c.toLowerCase().includes(cap.toLowerCase()) ||
-        cap.toLowerCase().includes(c.toLowerCase()),
-    ),
-  ) ?? [];
-  const capabilityGap = task?.requiredCapabilities.filter(
-    (cap) => !capabilityMatch.includes(cap),
-  ) ?? [];
-
-  // ── Step 6: Composite score ──────────────────────────────────
-  const onchainScore = Math.min(100, onchainReputation.averageScore * 20);
-  const registrationBonus = identity.erc8004Registered ? 100 : 0;
-  const cardQuality =
-    (identity.reachable ? 30 : 0) +
-    (identity.hasAgentCard ? 40 : 0) +
-    (identity.capabilities.length > 0 ? 30 : 0);
-  const capabilityFit = task
-    ? (task.requiredCapabilities.length > 0
-      ? (capabilityMatch.length / task.requiredCapabilities.length) * 100
-      : 100)
-    : 50;
-
-  let sybilPenalty = 0;
-  if (sybilIndicators.selfAttestationDetected) sybilPenalty += 15;
-  if (!sybilIndicators.attestationVelocityNormal) sybilPenalty += 10;
-  if (sybilIndicators.uniqueAttestorRatio < 0.5) sybilPenalty += 10;
-
-  const rawScore =
-    onchainScore * 0.30 +
-    localTrust.averageScore * 0.25 +
-    registrationBonus * 0.15 +
-    cardQuality * 0.15 +
-    capabilityFit * 0.15 -
-    sybilPenalty;
-
-  const trustScore = Math.max(0, Math.min(100, Math.round(rawScore)));
-
-  // ── Step 7: Risk-adjusted safeguards ─────────────────────────
+  // Risk + safeguards
   const riskLevel = task?.riskLevel ?? "medium";
   const safeguards = computeSafeguards(trustScore, riskLevel, capabilityGap);
   const riskAssessment = computeRiskAssessment(trustScore, riskLevel);
 
-  // ── Step 8: Confidence ───────────────────────────────────────
+  // Confidence (how many signal sources we have)
   let signalCount = 0;
   if (identity.reachable) signalCount++;
   if (identity.hasAgentCard) signalCount++;
@@ -164,58 +70,170 @@ export async function resolveAgent(
   if (localTrust.directAttestations > 0) signalCount++;
   const confidence = Math.round((signalCount / 5) * 100) / 100;
 
-  // ── Step 9: Verdict ──────────────────────────────────────────
   const verdict = computeVerdict(trustScore, confidence, riskLevel);
 
-  // ── Step 10: AI reasoning ────────────────────────────────────
+  // AI reasoning
   let reasoning = `Score ${trustScore}/100 from ${signalCount} signal sources. Verdict: ${verdict}.`;
   try {
     reasoning = await callAI(ctx.env, {
       system:
         "You are TrustVault, a trust resolution engine for autonomous agents. " +
-        "Given evidence about an agent (on-chain state, attestations, capabilities, " +
-        "sybil indicators), provide a 2-3 sentence trust assessment. " +
+        "Given evidence about an agent, provide a 2-3 sentence trust assessment. " +
         "Be specific: name the strongest signal and the biggest risk. " +
         "If there's a capability gap for the requested task, mention it. " +
         "Do not hedge — give a clear recommendation.",
       user: JSON.stringify({
         agentName: identity.name ?? agentUrl,
-        trustScore,
-        verdict,
+        trustScore, verdict,
         attestations: localTrust.directAttestations,
         categories: localTrust.categories,
         taskDescription: task?.description ?? task?.type ?? "general cooperation",
         erc8004Registered: identity.erc8004Registered,
         onchainFeedback: onchainReputation.feedbackCount,
-        capabilityMatch,
-        capabilityGap,
-        riskLevel,
-        sybilIndicators,
+        capabilityMatch, capabilityGap, riskLevel, sybilIndicators,
       }),
     });
   } catch { /* keep default reasoning */ }
 
-  // ── Step 11: Signed receipt ──────────────────────────────────
+  // Signed receipt
   const receiptId = crypto.randomUUID();
   const resolvedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
-  const digestInput = `${receiptId}:${verdict}:${trustScore}:${resolvedAt}`;
-  const digestBytes = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(digestInput),
-  );
-  const digest = Array.from(new Uint8Array(digestBytes))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const digest = await sha256Hex(`${receiptId}:${verdict}:${trustScore}:${resolvedAt}`);
 
   return {
-    verdict,
-    confidence,
-    trustScore,
+    verdict, confidence, trustScore,
     taskFit: { capabilityMatch, capabilityGap, riskAssessment, safeguards },
     report: { identity, onchainReputation, localTrust, sybilIndicators, reasoning },
-    receipt: { id: receiptId, resolvedAt, expiresAt, resolver: "TrustVault/2.1.0", targetAgent: agentUrl, digest },
+    receipt: { id: receiptId, resolvedAt, expiresAt, resolver: VERSION, targetAgent: agentUrl, digest },
   };
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+
+async function fetchAgentCard(baseUrl: string): Promise<IdentityReport> {
+  const identity: IdentityReport = {
+    reachable: false, hasAgentCard: false, name: null, capabilities: [], erc8004Registered: false,
+  };
+  try {
+    const res = await fetch(`${baseUrl}/.well-known/agent.json`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    identity.reachable = true;
+    if (res.ok) {
+      const card = (await res.json()) as Record<string, unknown>;
+      identity.hasAgentCard = true;
+      identity.name = typeof card.name === "string" ? card.name : null;
+      identity.capabilities = Array.isArray(card.capabilities) ? card.capabilities as string[] :
+        Array.isArray(card.tags) ? card.tags as string[] : [];
+      const ident = card.identity as Record<string, unknown> | undefined;
+      identity.erc8004Registered = ident?.standard === "ERC-8004";
+    }
+  } catch { /* unreachable */ }
+  return identity;
+}
+
+async function queryReputation(
+  env: Env, agentAddress: string,
+): Promise<{ feedbackCount: number; averageScore: number }> {
+  try {
+    const result = await jsonRpc(env.CHAIN_RPC_URL, "eth_call", [{
+      to: env.REPUTATION_REGISTRY,
+      data: SELECTORS.getReputation + agentAddress.slice(2).padStart(64, "0"),
+    }, "latest"]);
+    if (result !== "0x" && result.length > 66) {
+      const score = parseInt(result.slice(2, 66), 16);
+      const count = parseInt(result.slice(66, 130), 16);
+      if (count > 0 && !isNaN(score) && !isNaN(count)) {
+        return { feedbackCount: count, averageScore: score };
+      }
+    }
+  } catch { /* non-fatal */ }
+  return { feedbackCount: 0, averageScore: 0 };
+}
+
+/** Single-pass analysis over attestation history */
+function analyzeAttestations(
+  attestations: readonly Attestation[],
+  targetUrl: string,
+  targetName: string | null,
+) {
+  const urlLower = targetUrl.toLowerCase();
+  const nameLower = (targetName ?? "").toLowerCase();
+
+  let directCount = 0, directScoreSum = 0;
+  const directCategories = new Set<string>();
+  let selfAttestCount = 0, recentCount = 0;
+  const uniqueAttestors = new Set<string>();
+  const oneHourAgo = Date.now() - 3_600_000;
+
+  for (const a of attestations) {
+    const fromLower = a.from.toLowerCase();
+    const toLower = a.to.toLowerCase();
+
+    // Direct attestation check
+    if (fromLower === urlLower || fromLower === nameLower ||
+        toLower === urlLower || toLower === nameLower) {
+      directCount++;
+      directScoreSum += a.score;
+      directCategories.add(a.category);
+    }
+
+    // Sybil signals
+    if (a.from === a.to) selfAttestCount++;
+    if (a.timestamp > oneHourAgo) recentCount++;
+    uniqueAttestors.add(a.from);
+  }
+
+  return {
+    localTrust: {
+      directAttestations: directCount,
+      averageScore: directCount > 0 ? Math.round(directScoreSum / directCount) : 0,
+      categories: [...directCategories],
+    },
+    sybilIndicators: {
+      selfAttestationDetected: selfAttestCount > 0,
+      attestationVelocityNormal: recentCount <= 10,
+      uniqueAttestorRatio: attestations.length > 0
+        ? Math.round((uniqueAttestors.size / attestations.length) * 100) / 100
+        : 1.0,
+    } satisfies SybilIndicators,
+  };
+}
+
+function computeCompositeScore(
+  onchain: { averageScore: number },
+  local: { averageScore: number },
+  identity: IdentityReport,
+  capMatch: string[],
+  capRequired: string[],
+  task: ResolveRequest["task"],
+  sybil: SybilIndicators,
+): number {
+  const onchainScore = Math.min(100, onchain.averageScore * 20);
+  const registrationBonus = identity.erc8004Registered ? 100 : 0;
+  const cardQuality =
+    (identity.reachable ? 30 : 0) +
+    (identity.hasAgentCard ? 40 : 0) +
+    (identity.capabilities.length > 0 ? 30 : 0);
+  const capabilityFit = task
+    ? (capRequired.length > 0 ? (capMatch.length / capRequired.length) * 100 : 100)
+    : 50;
+
+  let sybilPenalty = 0;
+  if (sybil.selfAttestationDetected) sybilPenalty += 15;
+  if (!sybil.attestationVelocityNormal) sybilPenalty += 10;
+  if (sybil.uniqueAttestorRatio < 0.5) sybilPenalty += 10;
+
+  const raw =
+    onchainScore * 0.30 +
+    local.averageScore * 0.25 +
+    registrationBonus * 0.15 +
+    cardQuality * 0.15 +
+    capabilityFit * 0.15 -
+    sybilPenalty;
+
+  return Math.max(0, Math.min(100, Math.round(raw)));
 }
 
 function computeVerdict(score: number, confidence: number, risk: RiskLevel): Verdict {

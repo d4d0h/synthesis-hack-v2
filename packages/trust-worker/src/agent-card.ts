@@ -52,7 +52,7 @@ export function agentCard(env: Env) {
     identity: {
       standard: "ERC-8004",
       chain: "sepolia",
-      chainId: parseInt(env.CHAIN_ID || "11155111"),
+      chainId: parseInt(env.CHAIN_ID || "11155111", 10),
       registryAddress: env.IDENTITY_REGISTRY || "not-configured",
     },
     model: {
