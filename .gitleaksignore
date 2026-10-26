@@ -1,0 +1,4 @@
+# gitleaks false positives - verified 2026-10-26 (contract addresses, public test keys, client IDs, placeholders)
+6d40da9079d388d7842bd2efd9752359c126aad4:docs/skill.md:generic-api-key:234
+6d40da9079d388d7842bd2efd9752359c126aad4:docs/skill.md:generic-api-key:289
+c201b795bf963f58d76c6fb9057d40c71c4c752e:packages/trust-worker/src/ai.ts:generic-api-key:19
